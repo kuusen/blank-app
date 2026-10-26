@@ -2,7 +2,7 @@ import math
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="Калькулятор позиции", page_icon="📊", layout="centered")
+st.set_page_config(page_title="Калькулятор позиции", page_icon="", layout="centered")
 st.title("Калькулятор позиции")
 
 # ---------- Загрузка списков инструментов ----------
