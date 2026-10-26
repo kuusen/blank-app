@@ -85,7 +85,6 @@ labels = [o["label"] for o in options]
 
 # ---------- Выбор инструмента (вне формы → реактивный UI) ----------
 
-st.subheader("Инструмент")
 selected_label = st.selectbox(
     "Выберите тикер",
     options=labels if labels else ["— список недоступен —"],
