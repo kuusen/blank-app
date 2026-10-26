@@ -97,7 +97,7 @@ selected = next((o for o in options if o["label"] == selected_label), None)
 # ---------- Форма расчёта ----------
 
 with st.form("calc"):
-    st.markdown("## Параметры расчёта", anchors=False)
+    st.markdown("Параметры расчёта", anchors=False)
     col1, col2 = st.columns(2)
     with col1:
         stop_rub = st.number_input("Размер стопа, ₽", min_value=0.01, value=1000.0, step=100.0)
