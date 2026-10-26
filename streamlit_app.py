@@ -93,6 +93,7 @@ selected_label = st.selectbox(
 )
 selected = next((o for o in options if o["label"] == selected_label), None)
 
+
 # ---------- Форма расчёта ----------
 
 with st.form("calc"):
@@ -122,38 +123,6 @@ if submitted:
     if manual_step:
         step_price = step_manual
         instrument_label = "ручной ввод шага"
-
-    elif manual_ticker:
-        secid = ticker_manual.strip().upper()
-        if secid:
-            # пробуем как фьючерс
-            stepprice = None
-            name = secid
-            try:
-                url = (
-                    f"https://iss.moex.com/iss/engines/futures/markets/forts/"
-                    f"securities/{secid}.json?iss.meta=off&iss.only=securities"
-                    f"&securities.columns=SECID,SHORTNAME,STEPPRICE"
-                )
-                r = requests.get(url, timeout=10)
-                block = r.json().get("securities", {})
-                if block.get("data"):
-                    row = dict(zip(block["columns"], block["data"][0]))
-                    if row.get("STEPPRICE"):
-                        stepprice = float(row["STEPPRICE"])
-                        name = row.get("SHORTNAME", secid)
-            except Exception:
-                pass
-
-            if stepprice:
-                step_price = stepprice
-                instrument_label = f"{secid} — {name} (фьючерс)"
-            else:
-                # значит, это акция (или неизвестный тикер → трактуем как акцию)
-                step_price = 1.0
-                instrument_label = f"{secid} (акция)"
-        else:
-            st.error("Введите тикер.")
 
     elif options and selected:
         step_price = selected["step_price"]
