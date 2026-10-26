@@ -3,9 +3,7 @@ import requests
 import streamlit as st
 
 st.set_page_config(page_title="Калькулятор позиции", page_icon="📊", layout="centered")
-st.title("📊 Калькулятор позиции")
-st.caption("Акции: qty = stop_rub / (ticks × 1 ₽) · Фьючерсы: qty = stop_rub / (ticks × STEPPRICE)")
-
+st.title("Калькулятор позиции")
 
 # ---------- Загрузка списков инструментов ----------
 
