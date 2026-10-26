@@ -4,17 +4,18 @@ import streamlit as st
 
 st.set_page_config(page_title="Калькулятор позиции", page_icon="📊", layout="centered")
 st.title("📊 Калькулятор позиции")
-st.caption("qty = stop_rub / (ticks × step_price)")
+st.caption("Акции: qty = stop_rub / (ticks × 1 ₽) · Фьючерсы: qty = stop_rub / (ticks × STEPPRICE)")
 
 
 # ---------- Загрузка списков инструментов ----------
 
 @st.cache_data(ttl=600)
 def load_stocks():
+    """Список акций TQBR: [(secid, shortname), ...]"""
     url = (
         "https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/"
         "securities.json?iss.meta=off&iss.only=securities"
-        "&securities.columns=SECID,SHORTNAME,MINSTEP"
+        "&securities.columns=SECID,SHORTNAME"
     )
     try:
         r = requests.get(url, timeout=15)
@@ -22,24 +23,21 @@ def load_stocks():
         cols = block.get("columns", [])
         data = block.get("data", [])
         idx = {name: i for i, name in enumerate(cols)}
-        result = []
-        for row in data:
-            secid = row[idx["SECID"]]
-            name = row[idx["SHORTNAME"]] or secid
-            minstep = row[idx["MINSTEP"]]
-            if minstep:
-                result.append((secid, name, float(minstep)))
-        return result
+        return [
+            (row[idx["SECID"]], row[idx["SHORTNAME"]] or row[idx["SECID"]])
+            for row in data
+        ]
     except Exception:
         return []
 
 
 @st.cache_data(ttl=600)
 def load_futures():
+    """Список фьючерсов RFUD: [(secid, shortname, stepprice), ...]"""
     url = (
         "https://iss.moex.com/iss/engines/futures/markets/forts/boards/RFUD/"
         "securities.json?iss.meta=off&iss.only=securities"
-        "&securities.columns=SECID,SHORTNAME,MINSTEP,STEPPRICE"
+        "&securities.columns=SECID,SHORTNAME,STEPPRICE"
     )
     try:
         r = requests.get(url, timeout=15)
@@ -51,10 +49,9 @@ def load_futures():
         for row in data:
             secid = row[idx["SECID"]]
             name = row[idx["SHORTNAME"]] or secid
-            minstep = row[idx["MINSTEP"]]
             stepprice = row[idx["STEPPRICE"]]
-            if minstep and stepprice:
-                result.append((secid, name, float(minstep), float(stepprice)))
+            if stepprice:
+                result.append((secid, name, float(stepprice)))
         return result
     except Exception:
         return []
@@ -64,25 +61,24 @@ stocks = load_stocks()
 futures = load_futures()
 
 # ---------- Формируем список опций ----------
+# step_price: для акций — всегда 1, для фьючерсов — STEPPRICE
 
 options = []
 
-for secid, name, minstep in stocks:
+for secid, name in stocks:
     options.append({
         "label": f"{secid} — {name} (акция)",
         "secid": secid,
         "type": "Акция",
-        "step_actual": minstep,   # фактический MINSTEP с биржи
-        "step_default": 1.0,      # по умолчанию для акций — 1 ₽
+        "step_price": 1.0,
     })
 
-for secid, name, minstep, stepprice in futures:
+for secid, name, stepprice in futures:
     options.append({
         "label": f"{secid} — {name} (фьючерс)",
         "secid": secid,
         "type": "Фьючерс",
-        "step_actual": stepprice,  # STEPPRICE
-        "step_default": stepprice,
+        "step_price": stepprice,
     })
 
 options.sort(key=lambda x: x["label"])
@@ -98,21 +94,7 @@ selected_label = st.selectbox(
     index=0,
     help="Список подгружается с MOEX ISS и кэшируется на 10 минут.",
 )
-
 selected = next((o for o in options if o["label"] == selected_label), None)
-
-if selected and selected["type"] == "Акция":
-    st.caption(
-        f"ℹ️ Фактический MINSTEP = **{selected['step_actual']} ₽**. "
-        f"По умолчанию для акций стоимость шага = **1 ₽** (см. настройку ниже)."
-    )
-
-use_actual_minstep = st.checkbox(
-    "Для акций: использовать фактический MINSTEP вместо 1 ₽",
-    value=False,
-    help="По умолчанию 1 тик = 1 ₽ движения цены акции. "
-         "Включите, чтобы использовать биржевой MINSTEP (например, 0.01 ₽ для SBER).",
-)
 
 manual_ticker = st.checkbox("Ввести тикер вручную (если его нет в списке)")
 ticker_manual = ""
@@ -145,82 +127,51 @@ with st.form("calc"):
 if submitted:
     step_price = None
     instrument_label = ""
-    info_note = ""
 
     if manual_step:
         step_price = step_manual
         instrument_label = "ручной ввод шага"
+
     elif manual_ticker:
         secid = ticker_manual.strip().upper()
         if secid:
-            info = None
             # пробуем как фьючерс
+            stepprice = None
+            name = secid
             try:
                 url = (
                     f"https://iss.moex.com/iss/engines/futures/markets/forts/"
                     f"securities/{secid}.json?iss.meta=off&iss.only=securities"
-                    f"&securities.columns=SECID,SHORTNAME,MINSTEP,STEPPRICE"
+                    f"&securities.columns=SECID,SHORTNAME,STEPPRICE"
                 )
                 r = requests.get(url, timeout=10)
                 block = r.json().get("securities", {})
                 if block.get("data"):
                     row = dict(zip(block["columns"], block["data"][0]))
-                    if row.get("MINSTEP") and row.get("STEPPRICE"):
-                        info = ("Фьючерс", float(row["STEPPRICE"]),
-                                row.get("SHORTNAME", secid), float(row["MINSTEP"]))
+                    if row.get("STEPPRICE"):
+                        stepprice = float(row["STEPPRICE"])
+                        name = row.get("SHORTNAME", secid)
             except Exception:
                 pass
-            # пробуем как акцию
-            if not info:
-                try:
-                    url = (
-                        f"https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/"
-                        f"securities/{secid}.json?iss.meta=off&iss.only=securities"
-                        f"&securities.columns=SECID,SHORTNAME,MINSTEP"
-                    )
-                    r = requests.get(url, timeout=10)
-                    block = r.json().get("securities", {})
-                    if block.get("data"):
-                        row = dict(zip(block["columns"], block["data"][0]))
-                        if row.get("MINSTEP"):
-                            info = ("Акция", float(row["MINSTEP"]),
-                                    row.get("SHORTNAME", secid), float(row["MINSTEP"]))
-                except Exception:
-                    pass
 
-            if info:
-                typ, actual, name, minstep = info
-                if typ == "Акция":
-                    if use_actual_minstep:
-                        step_price = actual
-                        info_note = f"MINSTEP = {actual} ₽"
-                    else:
-                        step_price = 1.0
-                        info_note = f"шаг = 1 ₽ (MINSTEP = {actual} ₽)"
-                else:
-                    step_price = actual
-                    info_note = f"STEPPRICE = {actual} ₽"
-                instrument_label = f"{secid} — {name} ({typ})"
+            if stepprice:
+                step_price = stepprice
+                instrument_label = f"{secid} — {name} (фьючерс)"
             else:
-                st.error(f"Не удалось найти тикер **{secid}** на MOEX.")
-    else:
-        if options and selected:
-            if selected["type"] == "Акция":
-                if use_actual_minstep:
-                    step_price = selected["step_actual"]
-                    info_note = f"MINSTEP = {selected['step_actual']} ₽"
-                else:
-                    step_price = 1.0
-                    info_note = f"шаг = 1 ₽ (MINSTEP = {selected['step_actual']} ₽)"
-            else:
-                step_price = selected["step_actual"]
-                info_note = f"STEPPRICE = {selected['step_actual']} ₽"
-            instrument_label = selected["label"]
+                # значит, это акция (или неизвестный тикер → трактуем как акцию)
+                step_price = 1.0
+                instrument_label = f"{secid} (акция)"
         else:
-            st.error("Список инструментов не загрузился. Используйте ручной ввод.")
+            st.error("Введите тикер.")
+
+    elif options and selected:
+        step_price = selected["step_price"]
+        instrument_label = selected["label"]
+    else:
+        st.error("Список инструментов не загрузился. Используйте ручной ввод.")
 
     if step_price and step_price > 0:
-        st.success(f"Инструмент: **{instrument_label}** · {info_note}")
+        st.success(f"Инструмент: **{instrument_label}** · шаг цены = **{step_price} ₽**")
 
         qty_raw = stop_rub / (ticks * step_price)
         qty = math.floor(qty_raw)
