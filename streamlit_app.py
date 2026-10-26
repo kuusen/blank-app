@@ -93,12 +93,6 @@ selected_label = st.selectbox(
 )
 selected = next((o for o in options if o["label"] == selected_label), None)
 
-manual_ticker = st.checkbox("Ввести тикер вручную (если его нет в списке)")
-ticker_manual = ""
-if manual_ticker:
-    ticker_manual = st.text_input("Тикер", value="SBER")
-
-
 # ---------- Форма расчёта ----------
 
 with st.form("calc"):
