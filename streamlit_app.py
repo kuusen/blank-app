@@ -11,7 +11,6 @@ st.caption("qty = stop_rub / (ticks × step_price)")
 
 @st.cache_data(ttl=600)
 def load_stocks():
-    """Список акций TQBR: [(secid, shortname, minstep), ...]"""
     url = (
         "https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/"
         "securities.json?iss.meta=off&iss.only=securities"
@@ -28,7 +27,7 @@ def load_stocks():
             secid = row[idx["SECID"]]
             name = row[idx["SHORTNAME"]] or secid
             minstep = row[idx["MINSTEP"]]
-            if minstep:  # пропускаем инструменты без шага цены
+            if minstep:
                 result.append((secid, name, float(minstep)))
         return result
     except Exception:
@@ -37,7 +36,6 @@ def load_stocks():
 
 @st.cache_data(ttl=600)
 def load_futures():
-    """Список фьючерсов RFUD: [(secid, shortname, minstep, stepprice), ...]"""
     url = (
         "https://iss.moex.com/iss/engines/futures/markets/forts/boards/RFUD/"
         "securities.json?iss.meta=off&iss.only=securities"
@@ -62,44 +60,69 @@ def load_futures():
         return []
 
 
-# Загружаем один раз при старте (кэшируется)
 stocks = load_stocks()
 futures = load_futures()
 
-# Собираем общий список для selectbox: (label, secid, type, step_price)
-# Для акций step_price = minstep (шаг уже в рублях), для фьючерсов — stepprice.
+# ---------- Формируем список опций ----------
+
 options = []
 
 for secid, name, minstep in stocks:
-    label = f"{secid} — {name} (акция)"
-    options.append((label, secid, "Акция", minstep))
+    options.append({
+        "label": f"{secid} — {name} (акция)",
+        "secid": secid,
+        "type": "Акция",
+        "step_actual": minstep,   # фактический MINSTEP с биржи
+        "step_default": 1.0,      # по умолчанию для акций — 1 ₽
+    })
 
 for secid, name, minstep, stepprice in futures:
-    label = f"{secid} — {name} (фьючерс)"
-    options.append((label, secid, "Фьючерс", stepprice))
+    options.append({
+        "label": f"{secid} — {name} (фьючерс)",
+        "secid": secid,
+        "type": "Фьючерс",
+        "step_actual": stepprice,  # STEPPRICE
+        "step_default": stepprice,
+    })
 
-options.sort(key=lambda x: x[0])
+options.sort(key=lambda x: x["label"])
+labels = [o["label"] for o in options]
 
 
-# ---------- Форма калькулятора ----------
+# ---------- Выбор инструмента (вне формы → реактивный UI) ----------
 
-with st.form("calc"):
-    st.subheader("Инструмент")
+st.subheader("Инструмент")
+selected_label = st.selectbox(
+    "Выберите тикер",
+    options=labels if labels else ["— список недоступен —"],
+    index=0,
+    help="Список подгружается с MOEX ISS и кэшируется на 10 минут.",
+)
 
-    # Основной выбор — из списка
-    selected_label = st.selectbox(
-        "Выберите тикер",
-        options=[o[0] for o in options] if options else ["— список недоступен —"],
-        index=0,
-        help="Список подгружается с MOEX ISS. Если тикера нет — включите ручной ввод ниже.",
+selected = next((o for o in options if o["label"] == selected_label), None)
+
+if selected and selected["type"] == "Акция":
+    st.caption(
+        f"ℹ️ Фактический MINSTEP = **{selected['step_actual']} ₽**. "
+        f"По умолчанию для акций стоимость шага = **1 ₽** (см. настройку ниже)."
     )
 
-    # Ручной ввод как fallback
-    manual_ticker = st.checkbox("Ввести тикер вручную")
-    ticker_manual = ""
-    if manual_ticker:
-        ticker_manual = st.text_input("Тикер (например, SBER или GDZ6)", value="SBER")
+use_actual_minstep = st.checkbox(
+    "Для акций: использовать фактический MINSTEP вместо 1 ₽",
+    value=False,
+    help="По умолчанию 1 тик = 1 ₽ движения цены акции. "
+         "Включите, чтобы использовать биржевой MINSTEP (например, 0.01 ₽ для SBER).",
+)
 
+manual_ticker = st.checkbox("Ввести тикер вручную (если его нет в списке)")
+ticker_manual = ""
+if manual_ticker:
+    ticker_manual = st.text_input("Тикер", value="SBER")
+
+
+# ---------- Форма расчёта ----------
+
+with st.form("calc"):
     st.subheader("Параметры расчёта")
     col1, col2 = st.columns(2)
     with col1:
@@ -122,16 +145,16 @@ with st.form("calc"):
 if submitted:
     step_price = None
     instrument_label = ""
+    info_note = ""
 
     if manual_step:
         step_price = step_manual
         instrument_label = "ручной ввод шага"
     elif manual_ticker:
-        # Ручной тикер: пробуем определить через API (фьючерс → акция)
         secid = ticker_manual.strip().upper()
         if secid:
             info = None
-            # Пробуем фьючерс
+            # пробуем как фьючерс
             try:
                 url = (
                     f"https://iss.moex.com/iss/engines/futures/markets/forts/"
@@ -143,10 +166,11 @@ if submitted:
                 if block.get("data"):
                     row = dict(zip(block["columns"], block["data"][0]))
                     if row.get("MINSTEP") and row.get("STEPPRICE"):
-                        info = ("Фьючерс", float(row["STEPPRICE"]), row.get("SHORTNAME", secid))
+                        info = ("Фьючерс", float(row["STEPPRICE"]),
+                                row.get("SHORTNAME", secid), float(row["MINSTEP"]))
             except Exception:
                 pass
-            # Если не фьючерс — пробуем акцию
+            # пробуем как акцию
             if not info:
                 try:
                     url = (
@@ -159,28 +183,44 @@ if submitted:
                     if block.get("data"):
                         row = dict(zip(block["columns"], block["data"][0]))
                         if row.get("MINSTEP"):
-                            info = ("Акция", float(row["MINSTEP"]), row.get("SHORTNAME", secid))
+                            info = ("Акция", float(row["MINSTEP"]),
+                                    row.get("SHORTNAME", secid), float(row["MINSTEP"]))
                 except Exception:
                     pass
+
             if info:
-                typ, step_price, name = info
+                typ, actual, name, minstep = info
+                if typ == "Акция":
+                    if use_actual_minstep:
+                        step_price = actual
+                        info_note = f"MINSTEP = {actual} ₽"
+                    else:
+                        step_price = 1.0
+                        info_note = f"шаг = 1 ₽ (MINSTEP = {actual} ₽)"
+                else:
+                    step_price = actual
+                    info_note = f"STEPPRICE = {actual} ₽"
                 instrument_label = f"{secid} — {name} ({typ})"
             else:
-                st.error(f"Не удалось найти тикер **{secid}** на MOEX. Проверьте написание или включите ручной ввод шага.")
+                st.error(f"Не удалось найти тикер **{secid}** на MOEX.")
     else:
-        # Выбор из selectbox
-        if options:
-            chosen = next((o for o in options if o[0] == selected_label), None)
-            if chosen:
-                _, secid, typ, step_price = chosen
-                instrument_label = selected_label
+        if options and selected:
+            if selected["type"] == "Акция":
+                if use_actual_minstep:
+                    step_price = selected["step_actual"]
+                    info_note = f"MINSTEP = {selected['step_actual']} ₽"
+                else:
+                    step_price = 1.0
+                    info_note = f"шаг = 1 ₽ (MINSTEP = {selected['step_actual']} ₽)"
             else:
-                st.error("Не удалось распознать выбранный инструмент.")
+                step_price = selected["step_actual"]
+                info_note = f"STEPPRICE = {selected['step_actual']} ₽"
+            instrument_label = selected["label"]
         else:
-            st.error("Список инструментов не загрузился. Включите ручной ввод тикера или шага.")
+            st.error("Список инструментов не загрузился. Используйте ручной ввод.")
 
     if step_price and step_price > 0:
-        st.success(f"Инструмент: **{instrument_label}** · шаг цены = **{step_price} ₽**")
+        st.success(f"Инструмент: **{instrument_label}** · {info_note}")
 
         qty_raw = stop_rub / (ticks * step_price)
         qty = math.floor(qty_raw)
